@@ -3,7 +3,7 @@ import { Link } from "react-router";
 export function LandingPage() {
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10">
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col justify-center gap-8 px-6 py-10">
         <header className="flex items-center gap-3">
           <img
             src="/conclave.png"
@@ -38,9 +38,9 @@ export function LandingPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl border bg-card/60 p-3 shadow-sm">
+          <div className="mx-auto w-full max-w-md rounded-2xl border bg-card/60 p-3 shadow-sm">
             <video
-              className="aspect-video w-full rounded-xl bg-black"
+              className="aspect-square w-full rounded-xl bg-black object-cover"
               src="/opening-conclave.mp4"
               controls
               playsInline

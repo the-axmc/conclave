@@ -415,11 +415,11 @@ const buildEvidence = (
         timestamp: toTimestamp(baseTime, 16),
       };
 
-  const warningEntries = generationWarnings.map((warning, index) => ({
+  const warningEntries: EvidenceLedgerEntry[] = generationWarnings.map((warning, index) => ({
     id: `evidence-generation-warning-${index}`,
     planId,
     agent: "synthesizer",
-    type: "log" as const,
+    type: "log",
     summary: "Generation warning",
     details: warning,
     reliability: 0.35,
@@ -488,7 +488,7 @@ const buildEvidence = (
             id: "evidence-warning",
             planId,
             agent: "synthesizer" as EvidenceLedgerEntry["agent"],
-            type: "log",
+            type: "log" as EvidenceLedgerEntry["type"],
             summary: "Verification warning",
             details: verification.warning,
             reliability: 0.4,
