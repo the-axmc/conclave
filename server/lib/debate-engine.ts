@@ -741,7 +741,7 @@ export const runDebate = async (
       const proposal = proposals.find((item) => item.agent === role);
       if (!proposal) return;
       const planId = proposalPlanMap.get(role) ?? "plan-a";
-      const agentWeight = weights[role];
+      const agentWeight = Math.max(weights[role], 0.15);
       current = reviseFromAgent(
         current,
         role,
