@@ -62,12 +62,56 @@ const extractJson = (text: string) => {
   if (fencedMatch?.[1]) {
     return fencedMatch[1].trim();
   }
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return text.slice(start, end + 1);
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
   }
-  return text;
+
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        return trimmed.slice(start, i + 1);
+      }
+    }
+  }
+
+  return trimmed;
+};
+
+const parseJsonWithRepair = <T>(raw: string): T => {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    // Repair: strip common wrappers and re-extract JSON.
+    const repaired = extractJson(raw);
+    return JSON.parse(repaired) as T;
+  }
 };
 
 const detailTier = (weight: number) => {
@@ -277,30 +321,41 @@ export const generateAgentProposal = async (input: {
   ];
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const retryMessages =
+      attempt === 1
+        ? messages
+        : [
+            ...messages,
+            {
+              role: "system",
+              content:
+                "Retry: Output must be strict JSON only with the exact keys. No prose, no markdown.",
+            },
+          ];
     const content = await postChat(
       config,
       config.provider === "ollama"
         ? {
             model: config.model,
-            messages,
+            messages: retryMessages,
             stream: false,
             format: "json",
             options: {
-              temperature: config.agentTemperature,
+              temperature: Math.min(0.4, config.agentTemperature),
               num_predict: config.maxTokens,
             },
           }
         : {
             model: config.model,
-            temperature: config.agentTemperature,
+            temperature: Math.min(0.4, config.agentTemperature),
             max_tokens: config.maxTokens,
-            messages,
+            messages: retryMessages,
           },
     );
 
     let parsed: AgentProposalDraft;
     try {
-      parsed = JSON.parse(extractJson(content)) as AgentProposalDraft;
+      parsed = parseJsonWithRepair<AgentProposalDraft>(content);
     } catch (error) {
       if (attempt < 2) continue;
       throw new Error("LLM proposal response was not valid JSON.");
@@ -358,34 +413,52 @@ export const generateFinalSolution = async (input: {
     },
   ];
 
-  const content = await postChat(
-    config,
-    config.provider === "ollama"
-      ? {
-          model: config.model,
-          messages,
-          stream: false,
-          format: "json",
-          options: {
+  let parsed: FinalSolutionDraft | undefined;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const retryMessages =
+      attempt === 1
+        ? messages
+        : [
+            ...messages,
+            {
+              role: "system",
+              content:
+                "Retry: Output must be strict JSON only with the exact keys. No prose, no markdown.",
+            },
+          ];
+    const content = await postChat(
+      config,
+      config.provider === "ollama"
+        ? {
+            model: config.model,
+            messages: retryMessages,
+            stream: false,
+            format: "json",
+            options: {
+              temperature: Math.min(0.4, config.agentTemperature),
+              num_predict: 500,
+            },
+          }
+        : {
+            model: config.model,
             temperature: Math.min(0.4, config.agentTemperature),
-            num_predict: 500,
+            max_tokens: 500,
+            messages: retryMessages,
           },
-        }
-      : {
-          model: config.model,
-          temperature: Math.min(0.4, config.agentTemperature),
-          max_tokens: 500,
-          messages,
-        },
-  );
-
-  let parsed: FinalSolutionDraft;
-  try {
-    parsed = JSON.parse(extractJson(content)) as FinalSolutionDraft;
-  } catch (error) {
-    throw new Error("LLM final solution response was not valid JSON.");
+    );
+    try {
+      parsed = parseJsonWithRepair<FinalSolutionDraft>(content);
+      break;
+    } catch (error) {
+      if (attempt >= 2) {
+        throw new Error("LLM final solution response was not valid JSON.");
+      }
+    }
   }
 
+  if (!parsed) {
+    throw new Error("LLM final solution response was not valid JSON.");
+  }
   return validateFinalSolution(parsed);
 };
 
@@ -483,7 +556,7 @@ export const generateFinalResponse = async (input: {
     );
 
     try {
-      const parsed = JSON.parse(extractJson(content)) as { response?: string };
+      const parsed = parseJsonWithRepair<{ response?: string }>(content);
       if (!parsed.response) {
         throw new Error("Final response missing response field.");
       }
@@ -565,7 +638,7 @@ export const classifyPrompt = async (input: {
 
   let parsed: { category: PromptCategory };
   try {
-    parsed = JSON.parse(extractJson(content)) as { category: PromptCategory };
+    parsed = parseJsonWithRepair<{ category: PromptCategory }>(content);
   } catch (error) {
     throw new Error("Prompt category response was not valid JSON.");
   }

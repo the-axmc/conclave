@@ -183,22 +183,17 @@ const resolveWeights = (overrides?: DebateWeights): DebateWeights => ({
 });
 
 const buildDiff = (): DebateDiff => ({
-  summary: "Example patch output (fixture).",
+  summary: "Example patch output (demo).",
   diff: [
-    "diff --git a/src/services/userService.ts b/src/services/userService.ts",
+    "diff --git a/README.md b/README.md",
     "index 1b233d1..56c92fa 100644",
-    "--- a/src/services/userService.ts",
-    "+++ b/src/services/userService.ts",
-    "@@ -14,7 +14,12 @@ export const mapUser = (payload: AuthPayload): User => {",
-    "-  const role = payload.role;",
-    "+  const role = payload.role ?? \"viewer\";",
-    "   return {",
-    "     id: payload.id,",
-    "-    role,",
-    "+    role,",
-    "     name: payload.name,",
-    "   };",
-    " };",
+    "--- a/README.md",
+    "+++ b/README.md",
+    "@@ -1,3 +1,4 @@",
+    " # Conclave",
+    "+> Example patch output used for demo purposes.",
+    " ",
+    " ## Run locally",
   ].join("\n"),
 });
 
@@ -206,28 +201,27 @@ const buildDiff = (): DebateDiff => ({
 const buildTranscriptFromProposals = (
   baseTime: Date,
   scenario: string,
-  proposals: Array<{ agent: DebateAgent["role"]; proposal: string; summary: string; risk: string; riskSeverity: number; rationale: string[]; confidence: number }>,
+  proposals: Array<{ agent: DebateAgent["role"]; planId: string; proposal: string; summary: string; risk: string; riskSeverity: number; rationale: string[]; confidence: number }>,
   finalSolution?: { summary: string; steps: string[]; risks: string[] },
+  finalResponse?: string,
+  finalPlanId?: string,
 ): DebateMessage[] => {
   const baseTimestamp = baseTime.getTime();
   const byAgent = new Map(proposals.map((proposal) => [proposal.agent, proposal]));
-  const planForRole: Record<DebateAgent["role"], string> = {
-    planner: "plan-a",
-    skeptic: "plan-b",
-    security: "plan-c",
-    cost: "plan-d",
-    synthesizer: "plan-b",
-  };
+  const planForRole = new Map<DebateAgent["role"], string>(
+    proposals.map((proposal) => [proposal.agent, proposal.planId]),
+  );
   const messages: DebateMessage[] = [];
 
   agents.forEach((agent, index) => {
     if (agent.role === "synthesizer") {
       if (!finalSolution) return;
+      const responseNote = finalResponse ? `Final response: ${finalResponse}` : "Final response unavailable.";
       messages.push({
         id: "msg-synthesizer",
         agent: "synthesizer",
-        content: `Final recommendation for "${scenario}": ${finalSolution.summary}`,
-        preferredPlanId: planForRole.synthesizer,
+        content: `Final recommendation for "${scenario}": ${finalSolution.summary}\n${responseNote}`,
+        preferredPlanId: finalPlanId ?? planForRole.get("synthesizer") ?? proposals[0]?.planId ?? "plan-a",
         confidence: 0.7,
         reasons: finalSolution.steps.length
           ? finalSolution.steps.slice(0, 3).map((step) => `Step: ${step}`)
@@ -245,7 +239,7 @@ const buildTranscriptFromProposals = (
       id: `msg-${agent.role}`,
       agent: agent.role,
       content: `${proposal.summary}\n${proposal.proposal}\nRisk: ${proposal.risk} (severity ${proposal.riskSeverity})`,
-      preferredPlanId: planForRole[agent.role],
+      preferredPlanId: planForRole.get(agent.role) ?? proposals[0]?.planId ?? "plan-a",
       confidence: proposal.confidence,
       reasons: proposal.rationale,
       disconfirmingTest: `Validate this proposal for "${scenario}" with a targeted test.`,
@@ -259,13 +253,13 @@ const buildTranscriptFromProposals = (
 
 
 const plansFromProposals = (
-  proposals: Array<{ agent: DebateAgent["role"]; proposal: string; rationale: string[]; confidence: number }>,
+  proposals: Array<{ agent: DebateAgent["role"]; planId: string; proposal: string; rationale: string[]; confidence: number }>,
 ): DebatePlan[] => {
   const order: DebateAgent["role"][] = ["planner", "skeptic", "security", "cost"];
   return order.map((role, index) => {
     const proposal = proposals.find((item) => item.agent === role);
     return {
-      id: `plan-${String.fromCharCode(97 + index)}`,
+      id: proposal?.planId ?? `plan-${String.fromCharCode(97 + index)}`,
       title: proposal ? `${role} proposal` : `Plan ${index + 1}`,
       summary: proposal?.proposal ?? "No proposal available.",
       steps: proposal?.rationale?.length ? proposal.rationale : ["Gather details", "Draft approach", "Validate outcome"],
@@ -377,10 +371,28 @@ const buildEvidence = (
   generationWarnings: string[],
   plans: DebatePlan[],
   includePatch: boolean,
+  finalEntries: ProbabilityEntry[],
+  proposals: Array<{
+    agent: DebateAgent["role"];
+    planId: string;
+    summary: string;
+    proposal: string;
+    risk: string;
+  }>,
 ): EvidenceLedgerEntry[] => {
   const selectedPlan = plans.find((plan) => plan.id === planId);
   const selectedSummary = selectedPlan?.summary ?? "Selected plan summary unavailable.";
   const selectedRisk = selectedPlan?.risks?.[0] ?? "Primary risk not specified.";
+  const plannerProposal = proposals.find((proposal) => proposal.agent === "planner");
+  const skepticProposal = proposals.find((proposal) => proposal.agent === "skeptic");
+  const securityProposal = proposals.find((proposal) => proposal.agent === "security");
+  const costProposal = proposals.find((proposal) => proposal.agent === "cost");
+  const proposalProbabilityMap = new Map<DebateAgent["role"], number>(
+    proposals.map((proposal) => {
+      const entry = finalEntries.find((item) => item.planId === proposal.planId);
+      return [proposal.agent, entry?.probability ?? 0];
+    }),
+  );
   const verificationEntry: EvidenceLedgerEntry = runVerification
     ? {
         id: "evidence-verification",
@@ -414,16 +426,26 @@ const buildEvidence = (
     timestamp: toTimestamp(baseTime, 5 + index),
   }));
 
-  const entries: EvidenceLedgerEntry[] = [
+  const agentEntries: EvidenceLedgerEntry[] = [
     {
       id: "evidence-planner",
       planId,
       agent: "planner",
       type: "analysis",
       summary: "Planner rationale captured for selected plan.",
-      details: selectedSummary,
+      details: plannerProposal?.summary ?? selectedSummary,
       reliability: 0.62,
       timestamp: toTimestamp(baseTime, 2),
+    },
+    {
+      id: "evidence-skeptic",
+      planId,
+      agent: "skeptic",
+      type: "analysis",
+      summary: "Skeptic stress-tested the selected plan.",
+      details: skepticProposal?.summary ?? "Skeptic summary unavailable.",
+      reliability: 0.6,
+      timestamp: toTimestamp(baseTime, 5),
     },
     {
       id: "evidence-security",
@@ -431,10 +453,33 @@ const buildEvidence = (
       agent: "security",
       type: "analysis",
       summary: "Security flagged key risk for selected plan.",
-      details: selectedRisk,
+      details: securityProposal?.risk ?? selectedRisk,
       reliability: 0.7,
       timestamp: toTimestamp(baseTime, 7),
     },
+    {
+      id: "evidence-cost",
+      planId,
+      agent: "cost",
+      type: "analysis",
+      summary: "Cost assessed operational impact for selected plan.",
+      details: costProposal?.summary ?? "Cost summary unavailable.",
+      reliability: 0.6,
+      timestamp: toTimestamp(baseTime, 6),
+    },
+  ];
+  const sortedAgentEntries = [...agentEntries].sort((a, b) => {
+    const aScore = proposalProbabilityMap.get(a.agent) ?? 0;
+    const bScore = proposalProbabilityMap.get(b.agent) ?? 0;
+    return bScore - aScore;
+  });
+  const resortedAgentEntries = sortedAgentEntries.map((entry, index) => ({
+    ...entry,
+    timestamp: toTimestamp(baseTime, 2 + index),
+  }));
+
+  const entriesUnordered: EvidenceLedgerEntry[] = [
+    ...resortedAgentEntries,
     ...warningEntries,
     verificationEntry,
     ...(verification.warning
@@ -452,6 +497,11 @@ const buildEvidence = (
         ]
       : []),
   ];
+
+  const entries = entriesUnordered.map((entry, index) => ({
+    ...entry,
+    timestamp: toTimestamp(baseTime, 2 + index),
+  }));
 
   if (includePatch) {
     entries.push({
@@ -517,7 +567,7 @@ export const runDebate = async (
     ].some((word) => lowered.includes(word));
   };
   const codeScenario = isCodeScenario(scenarioText);
-  const runVerification = codeScenario ? (runVerificationRequested || codeScenario) : false;
+  const runVerification = codeScenario ? runVerificationRequested : false;
   const llmConfig = getLlmConfig(providerOverride);
   let plans = basePlans;
   const generationWarnings: string[] = [];
@@ -548,7 +598,8 @@ export const runDebate = async (
     generationWarnings.push("Verification was auto-enabled for code-related scenarios.");
   }
 
-  let proposals: Array<{ agent: DebateAgent["role"]; proposal: string; summary: string; risk: string; riskSeverity: number; rationale: string[]; confidence: number }> = [];
+  const proposalOrder: DebateAgent["role"][] = ["planner", "skeptic", "security", "cost"];
+  let proposals: Array<{ agent: DebateAgent["role"]; planId: string; proposal: string; summary: string; risk: string; riskSeverity: number; rationale: string[]; confidence: number }> = [];
   let finalSolution: { summary: string; steps: string[]; risks: string[]; assumptions: string[] } | undefined;
   let transcript: DebateMessage[] = [];
   let finalResponse: string | undefined;
@@ -559,6 +610,8 @@ export const runDebate = async (
     for (const agent of agents) {
       if (agent.role === "synthesizer") continue;
       try {
+        const orderIndex = proposalOrder.indexOf(agent.role);
+        const planId = orderIndex >= 0 ? `plan-${String.fromCharCode(97 + orderIndex)}` : "plan-a";
         const draft = await generateAgentProposal({
           agent,
           scenario: scenarioText,
@@ -569,6 +622,7 @@ export const runDebate = async (
         });
         proposals.push({
           agent: agent.role,
+          planId,
           proposal: draft.proposal,
           summary: draft.summary,
           risk: draft.risk,
@@ -582,11 +636,24 @@ export const runDebate = async (
       }
     }
 
-    transcript = buildTranscriptFromProposals(baseTime, scenarioText, proposals, finalSolution);
   }
 
   if (proposals.length === 0) {
-    throw new Error("LLM proposal generation failed for all agents.");
+    generationWarnings.push("All agent proposals failed; using fallback proposals.");
+    const fallbackOrder: DebateAgent["role"][] = ["planner", "skeptic", "security", "cost"];
+    proposals = fallbackOrder.map((role, index) => {
+      const planId = `plan-${String.fromCharCode(97 + index)}`;
+      return {
+        agent: role,
+        planId,
+        summary: `Fallback ${role} summary for "${scenarioText}".`,
+        proposal: `Provide a ${role}-focused response tailored to "${scenarioText}".`,
+        risk: "Fallback risk: proposal lacks model validation.",
+        riskSeverity: 3,
+        rationale: [`Fallback rationale generated for ${role}.`],
+        confidence: clampUnit(weights[role] ?? 0.4),
+      };
+    });
   }
 
   if (proposals.length > 0) {
@@ -595,15 +662,9 @@ export const runDebate = async (
 
   if (runVerification) {
     try {
-      const proposalPlanMap = new Map<DebateAgent["role"], string>([
-        ["planner", "plan-a"],
-        ["skeptic", "plan-b"],
-        ["security", "plan-c"],
-        ["cost", "plan-d"],
-      ]);
       const ranked = proposals
         .map((proposal) => ({
-          planId: proposalPlanMap.get(proposal.agent) ?? "plan-a",
+          planId: proposal.planId,
           confidence: proposal.confidence,
         }))
         .sort((a, b) => b.confidence - a.confidence);
@@ -623,8 +684,8 @@ export const runDebate = async (
         sessionId: `session-${baseTime.getTime()}`,
         planId: targetPlanId,
         mode,
-        fixturePath: process.env.VERIFICATION_FIXTURE_PATH,
-        command: process.env.VERIFICATION_COMMAND,
+        fixturePath: process.env.VERIFICATION_FIXTURE_PATH ?? process.env.DAYTONA_FIXTURE_PATH,
+        command: process.env.VERIFICATION_COMMAND ?? process.env.DAYTONA_COMMAND,
       });
       verification = {
         passed: result.status === "pass",
@@ -727,20 +788,12 @@ export const runDebate = async (
   const initial = dampAndNormalize(initialProbabilitiesForPlans(baseTime, plans));
   probabilities.push(recordSnapshot(toTimestamp(baseTime, 1), "Initial priors.", initial));
 
-  const proposalOrder: DebateAgent["role"][] = ["planner", "skeptic", "security", "cost"];
-  const proposalPlanMap = new Map<DebateAgent["role"], string>([
-    ["planner", "plan-a"],
-    ["skeptic", "plan-b"],
-    ["security", "plan-c"],
-    ["cost", "plan-d"],
-  ]);
-
   let current = initial;
   if (proposals.length > 0) {
     proposalOrder.forEach((role, index) => {
       const proposal = proposals.find((item) => item.agent === role);
       if (!proposal) return;
-      const planId = proposalPlanMap.get(role) ?? "plan-a";
+      const planId = proposal.planId;
       const agentWeight = Math.max(weights[role], 0.15);
       current = reviseFromAgent(
         current,
@@ -828,6 +881,8 @@ export const runDebate = async (
           generationWarnings,
           plans,
           true,
+          verified,
+          proposals,
         )
       : [];
   const uncertaintySummary = buildUncertaintySummary(plans, verified, runVerification);
@@ -850,10 +905,33 @@ export const runDebate = async (
     : finalPlan
       ? `If the assumptions hold, proceed with \"${finalPlan.title}\".`
       : "Proceed with the selected plan if assumptions hold.";
-  const actionAssumptions = finalSolution?.assumptions ?? [
+  const actionAssumptions = finalSolution?.assumptions
+    ? [...finalSolution.assumptions]
+    : [
     runVerification ? "Verification evidence available." : "Verification skipped; theoretical run.",
     codeScenario ? "Code scenario detected; verification prioritized." : "Scenario is non-code.",
   ];
+  const verificationNote =
+    !codeScenario && runVerificationRequested
+      ? "Verification disabled for non-code prompts."
+      : !runVerification
+        ? "Verification skipped."
+        : "Verification enabled.";
+  if (!codeScenario && runVerificationRequested) {
+    generationWarnings.push("Verification disabled for non-code prompts.");
+    if (!actionAssumptions.includes("Verification disabled for non-code prompts.")) {
+      actionAssumptions.push("Verification disabled for non-code prompts.");
+    }
+  }
+
+  transcript = buildTranscriptFromProposals(
+    baseTime,
+    scenarioText,
+    proposals,
+    finalSolution,
+    finalResponse,
+    finalPlanId,
+  );
 
   return {
     id: `session-${baseTime.getTime()}`,
@@ -877,7 +955,7 @@ export const runDebate = async (
     proposals,
     finalSolution,
     promptCategory,
-    winningAgent: proposalOrder.find((role) => proposalPlanMap.get(role) === finalPlanId),
+    winningAgent: proposals.find((proposal) => proposal.planId === finalPlanId)?.agent,
     codeScenario,
     daytonaOutput: runVerification && codeScenario ? verification.output : undefined,
     belief: {
@@ -890,5 +968,6 @@ export const runDebate = async (
       assumptions: actionAssumptions,
       response: finalResponse,
     },
+    verificationNote,
   };
 };

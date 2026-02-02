@@ -14,6 +14,7 @@ interface ControlPanelProps {
   onWeightsChange: (weights: DebateWeights) => void;
   runVerification: boolean;
   onRunVerificationChange: (value: boolean) => void;
+  verificationNote?: string;
   llmProvider: "ollama" | "groq";
   onLlmProviderChange: (value: "ollama" | "groq") => void;
   onRunDebate: () => void;
@@ -28,6 +29,7 @@ export function ControlPanel({
   onWeightsChange,
   runVerification,
   onRunVerificationChange,
+  verificationNote,
   llmProvider,
   onLlmProviderChange,
   onRunDebate,
@@ -126,6 +128,11 @@ export function ControlPanel({
               onCheckedChange={onRunVerificationChange}
             />
           </div>
+          {verificationNote && (
+            <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
+              {verificationNote}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-4">

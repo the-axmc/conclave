@@ -82,6 +82,7 @@ export function HomePage() {
               onWeightsChange={setWeights}
               runVerification={runVerification}
               onRunVerificationChange={setRunVerification}
+              verificationNote={session?.verificationNote}
               llmProvider={llmProvider}
               onLlmProviderChange={setLlmProvider}
               onRunDebate={handleRunDebate}

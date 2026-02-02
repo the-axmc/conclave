@@ -101,8 +101,10 @@ export type DebateSession = {
     assumptions: string[];
     response?: string;
   };
+  verificationNote?: string;
   proposals?: Array<{
     agent: AgentRole;
+    planId: string;
     proposal: string;
     summary: string;
     risk: string;

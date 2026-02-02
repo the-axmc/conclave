@@ -1,13 +1,36 @@
-import { createHTTPServer } from "@leanmcp/core";
+import "reflect-metadata";
+import { createHTTPServer, MCPServer, Optional, SchemaConstraint, Tool } from "@leanmcp/core";
+import { spawn } from "child_process";
+import { access } from "fs/promises";
 
-type VerifyInput = {
-  sessionId: string;
-  planId: string;
-  mode: "mock" | "real";
-  fixturePath?: string;
-  command?: string;
+class PingInput {
+  @Optional()
+  @SchemaConstraint({ description: "Optional API key" })
   apiKey?: string;
-};
+}
+
+class VerifyPlanInput {
+  @SchemaConstraint({ description: "Session id" })
+  sessionId!: string;
+
+  @SchemaConstraint({ description: "Plan id" })
+  planId!: string;
+
+  @SchemaConstraint({ description: "Verification mode", enum: ["mock", "real"] })
+  mode!: "mock" | "real";
+
+  @Optional()
+  @SchemaConstraint({ description: "Optional fixture path" })
+  fixturePath?: string;
+
+  @Optional()
+  @SchemaConstraint({ description: "Optional command" })
+  command?: string;
+
+  @Optional()
+  @SchemaConstraint({ description: "Optional API key" })
+  apiKey?: string;
+}
 
 type VerifyOutput = {
   evidenceId: string;
@@ -21,6 +44,14 @@ type VerifyOutput = {
 };
 
 const version = "0.1.0";
+
+const requireApiKey = (inputKey?: string) => {
+  const expected = process.env.MCP_API_KEY;
+  if (!expected) return;
+  if (!inputKey || inputKey !== expected) {
+    throw new Error("Unauthorized");
+  }
+};
 
 const buildMockLogs = (planId: string) => {
   const outputs: Record<string, { passed: boolean; summary: string; logs: string[] }> = {
@@ -77,61 +108,87 @@ const buildMockLogs = (planId: string) => {
   return outputs[planId] ?? outputs["plan-a"];
 };
 
-const tools = {
-  ping: {
-    description: "Health check for conclave-tools.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        apiKey: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    handler: async (input: { apiKey?: string }) => {
-      if (process.env.MCP_API_KEY && input.apiKey !== process.env.MCP_API_KEY) {
-        throw new Error("Unauthorized");
+const runCommand = async (cwd: string, command: string, timeoutMs: number) => {
+  const startedAt = new Date().toISOString();
+  const startMs = Date.now();
+  return await new Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    startedAt: string;
+    finishedAt: string;
+    timedOut: boolean;
+  }>((resolve) => {
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const limit = 20000;
+    const append = (target: "stdout" | "stderr", chunk: string) => {
+      if (target === "stdout") {
+        stdout = (stdout + chunk).slice(0, limit);
+      } else {
+        stderr = (stderr + chunk).slice(0, limit);
       }
+    };
 
-      return {
-        ok: true,
-        name: "conclave-tools",
-        version,
-      };
-    },
-  },
-  verify_plan: {
-    description: "Run verification and return structured evidence.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        planId: { type: "string" },
-        mode: { type: "string", enum: ["mock", "real"] },
-        fixturePath: { type: "string" },
-        command: { type: "string" },
-        apiKey: { type: "string" },
-      },
-      required: ["sessionId", "planId", "mode"],
-      additionalProperties: false,
-    },
-    handler: async (input: VerifyInput): Promise<VerifyOutput> => {
-      if (process.env.MCP_API_KEY && input.apiKey !== process.env.MCP_API_KEY) {
-        throw new Error("Unauthorized");
-      }
+    child.stdout?.on("data", (data) => append("stdout", data.toString()));
+    child.stderr?.on("data", (data) => append("stderr", data.toString()));
 
-      const startedAt = new Date().toISOString();
-      const evidenceId = `evidence-${input.sessionId}-${input.planId}-${Date.now()}`;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
 
-      if (input.mode === "real") {
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({
+        stdout,
+        stderr,
+        exitCode: typeof code === "number" ? code : 1,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        timedOut,
+      });
+    });
+  });
+};
+
+class ConclaveToolsService {
+  @Tool({ description: "Health check for conclave-tools.", inputClass: PingInput })
+  async ping(input: PingInput) {
+    requireApiKey(input.apiKey);
+    return { ok: true, name: "conclave-tools", version };
+  }
+
+  @Tool({ description: "Run verification and return structured evidence.", inputClass: VerifyPlanInput })
+  async verify_plan(input: VerifyPlanInput): Promise<VerifyOutput> {
+    requireApiKey(input.apiKey);
+    const startedAt = new Date().toISOString();
+    const evidenceId = `evidence-${input.sessionId}-${input.planId}-${Date.now()}`;
+
+    if (input.mode === "real") {
+      const fixturePath = input.fixturePath ?? process.env.DAYTONA_FIXTURE_PATH ?? "./fixtures/daytona-fixture";
+      const command = input.command ?? process.env.DAYTONA_COMMAND ?? "npm test";
+      const timeoutMs = Number(process.env.DAYTONA_TIMEOUT_MS || 90000);
+
+      try {
+        await access(fixturePath);
+      } catch {
         const finishedAt = new Date().toISOString();
         return {
           evidenceId,
           status: "error",
-          summary: "Real verification not implemented yet.",
+          summary: "Fixture path not found for real verification.",
           logs: [
-            "Real verification is not implemented.",
-            `fixturePath=${input.fixturePath ?? "unset"}`,
-            `command=${input.command ?? "unset"}`,
+            "Fixture path is missing or unreadable.",
+            `fixturePath=${fixturePath}`,
+            `command=${command}`,
           ],
           exitCode: 1,
           startedAt,
@@ -140,28 +197,51 @@ const tools = {
         };
       }
 
-      const mock = buildMockLogs(input.planId);
-      const finishedAt = new Date().toISOString();
+      const result = await runCommand(fixturePath, command, timeoutMs);
+      const status = result.timedOut ? "error" : result.exitCode === 0 ? "pass" : "fail";
+      const summary = result.timedOut
+        ? "Verification timed out."
+        : result.exitCode === 0
+          ? "Verification passed."
+          : "Verification failed.";
+
       return {
         evidenceId,
-        status: mock.passed ? "pass" : "fail",
-        summary: mock.summary,
-        logs: mock.logs,
-        exitCode: mock.passed ? 0 : 1,
-        startedAt,
-        finishedAt,
-        reliability: mock.passed ? 0.9 : 0.75,
+        status,
+        summary,
+        logs: [
+          `[daytona] fixturePath=${fixturePath}`,
+          `[daytona] command=${command}`,
+          ...(result.stdout ? [`--- stdout ---\n${result.stdout}`] : []),
+          ...(result.stderr ? [`--- stderr ---\n${result.stderr}`] : []),
+        ],
+        exitCode: result.exitCode,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        reliability: status === "pass" ? 0.9 : status === "fail" ? 0.75 : 0.2,
       };
-    },
-  },
+    }
+
+    const mock = buildMockLogs(input.planId);
+    const finishedAt = new Date().toISOString();
+    return {
+      evidenceId,
+      status: mock.passed ? "pass" : "fail",
+      summary: mock.summary,
+      logs: mock.logs,
+      exitCode: mock.passed ? 0 : 1,
+      startedAt,
+      finishedAt,
+      reliability: mock.passed ? 0.9 : 0.75,
+    };
+  }
+}
+
+const serverFactory = () => {
+  const server = new MCPServer({ name: "conclave-tools", version, logging: true });
+  server.registerService(new ConclaveToolsService());
+  return server.getServer();
 };
 
-const server = createHTTPServer({
-  name: "conclave-tools",
-  version,
-  tools,
-});
-
-server.listen(3001, () => {
-  console.log("conclave-tools MCP server listening on :3001");
-});
+await createHTTPServer(serverFactory, { port: 3001, cors: true, logging: true });
+console.log("conclave-tools MCP server listening on :3001");

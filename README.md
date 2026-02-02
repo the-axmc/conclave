@@ -1,24 +1,35 @@
 # Conclave
 
-Probability Parliament demo app (Vite + React + Node server).
+Conclave is a multi‑agent decision engine that runs structured debates between specialized agents (Planner, Skeptic, Security, Cost, Synthesizer). Instead of returning one answer, it produces competing proposals, a probability distribution over them, and a final response synthesized from the debate. When a prompt involves code, Conclave can attach verification evidence from a local MCP tool chain.
 
-Note: The transcript is a simulation of a multi-agent debate loop for demo purposes.
-The "Final Diff" is an example patch output.
+## What it does
+- Generates distinct agent proposals and a ranked probability distribution (never 0%/100%).
+- Shows explicit disagreement, risks, and assumptions.
+- Produces a final response (not just a recommendation), derived from the debate.
+- Optionally runs verification for code prompts and surfaces evidence logs.
 
-To enable real agent text generation (Phase 1), set `LLM_PROVIDER` and the provider variables:
-- `LLM_PROVIDER=ollama` with `OLLAMA_URL` + `OLLAMA_MODEL`
-- `LLM_PROVIDER=groq` with `GROQ_URL` + `GROQ_API_KEY` + `GROQ_MODEL`
+## Architecture
+- Vite + React UI for debate inputs, weights, and outputs.
+- Lightweight Node server (`/server`) orchestrates debate runs and persists sessions.
+- LeanMCP server (`/mcp/conclave-tools`) exposes verification tools (`ping`, `verify_plan`).
+- LLM providers: Local (Ollama) or API (Groq), selectable in the UI.
 
-## Run with real Daytona
-1) Copy `.env.example` to `.env` and set `DAYTONA_API_KEY` + `MCP_URL` (set `ADAPTER_MODE=real` to force real adapter, or `auto` to use real only when configured).
-2) Ensure the fixture repo exists at `DAYTONA_FIXTURE_PATH` (default `./fixtures/daytona-fixture`).
-3) Start the server in one terminal: `node server/index.ts` (or your existing server script).
-4) Start the UI in another terminal: `bun run dev`.
-5) Toggle “Verification Mode” on and run a debate.
+## Run locally
+1) Copy `.env.example` to `.env`.
+2) Set LLM provider vars:
+   - Ollama: `LLM_PROVIDER=ollama`, `OLLAMA_URL`, `OLLAMA_MODEL`
+   - Groq: `LLM_PROVIDER=groq`, `GROQ_URL`, `GROQ_API_KEY`, `GROQ_MODEL`
+3) Start MCP tools: `npm run dev:mcp`
+4) Start API: `npm run dev:server`
+5) Start UI: `npm run dev`
+6) Or run all: `npm run dev:full`
 
-## Run locally (MCP)
-1) Copy `.env.example` to `.env` and set `MCP_URL` + LLM provider keys.
-2) Start MCP tools: `npm run dev:mcp`
-3) Start API: `npm run dev:server`
-4) Start UI: `npm run dev`
-5) Or run all: `npm run dev:full`
+## Verification behavior
+- Verification runs only for code prompts.
+- If MCP is unreachable, the server falls back to mock verification and records a warning.
+- The UI notes when verification is skipped for non‑code prompts.
+
+## Notes
+- The “Final Diff” is a demo artifact (not a real patch).
+- Evidence entries are ordered by the final probabilities.
+
