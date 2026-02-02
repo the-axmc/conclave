@@ -7,6 +7,7 @@ import {
 import { ErrorBoundary } from '@/components/error/boundary';
 import { RouteErrorBoundary } from '@/components/error/route-error-boundary';
 import { HomePage } from '@/pages/home'
+import { LandingPage } from '@/pages/landing'
 import '@/index.css'
 import { Toaster } from 'react-hot-toast'
 
@@ -19,6 +20,11 @@ window.addEventListener('vite:preloadError', (event) => {
 const router = createBrowserRouter([
   {
     path: "/",
+    element: <LandingPage />,
+    errorElement: <RouteErrorBoundary />,
+  },
+  {
+    path: "/app",
     element: <HomePage />,
     errorElement: <RouteErrorBoundary />,
   }

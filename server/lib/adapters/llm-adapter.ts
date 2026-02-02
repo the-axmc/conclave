@@ -374,7 +374,7 @@ export const generateAgentProposal = async (input: {
 
 export const generateFinalSolution = async (input: {
   scenario: string;
-  proposals: AgentProposalDraft[];
+  proposals: Array<Pick<AgentProposalDraft, "proposal" | "rationale" | "confidence">>;
   evidence?: { summary: string; output: string };
   providerOverride?: LlmProvider;
 }): Promise<FinalSolutionDraft> => {
@@ -466,7 +466,7 @@ export const generateFinalResponse = async (input: {
   scenario: string;
   promptCategory?: string;
   finalSolution: FinalSolutionDraft;
-  proposals: AgentProposalDraft[];
+  proposals: Array<Pick<AgentProposalDraft, "proposal" | "rationale" | "confidence">>;
   evidence?: { summary: string; output: string };
   codeScenario?: boolean;
   providerOverride?: LlmProvider;

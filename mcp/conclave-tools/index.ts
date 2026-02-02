@@ -110,7 +110,6 @@ const buildMockLogs = (planId: string) => {
 
 const runCommand = async (cwd: string, command: string, timeoutMs: number) => {
   const startedAt = new Date().toISOString();
-  const startMs = Date.now();
   return await new Promise<{
     stdout: string;
     stderr: string;

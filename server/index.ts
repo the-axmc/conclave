@@ -62,18 +62,6 @@ const writeSessions = async (sessions: DebateSession[]) => {
   await writeFile(dataPath, JSON.stringify(sessions, null, 2));
 };
 
-const collectBody = async (req: Request): Promise<string> => {
-  const chunks: Uint8Array[] = [];
-  const stream = req.body?.getReader();
-  if (!stream) return "";
-  while (true) {
-    const { done, value } = await stream.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-};
-
 type RequestWithBody = {
   method?: string;
   url?: string;

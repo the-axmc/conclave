@@ -487,7 +487,7 @@ const buildEvidence = (
           {
             id: "evidence-warning",
             planId,
-            agent: "synthesizer",
+            agent: "synthesizer" as EvidenceLedgerEntry["agent"],
             type: "log",
             summary: "Verification warning",
             details: verification.warning,
