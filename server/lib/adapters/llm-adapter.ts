@@ -1,19 +1,21 @@
 import type { DebateAgent, DebateWeights } from "../../../src/lib/probability-parliament-types";
 
+export type LlmProvider = "groq" | "ollama";
+
 type LlmConfig = {
   enabled: boolean;
   url?: string;
   apiKey?: string;
   model?: string;
-  provider: "groq" | "ollama";
+  provider: LlmProvider;
   temperature: number;
   agentTemperature: number;
   maxTokens: number;
   promptVersion: string;
 };
 
-export const getLlmConfig = (): LlmConfig => {
-  const providerRaw = process.env.LLM_PROVIDER ?? "groq";
+export const getLlmConfig = (providerOverride?: LlmProvider): LlmConfig => {
+  const providerRaw = providerOverride ?? process.env.LLM_PROVIDER ?? "groq";
   const provider = providerRaw === "ollama" ? "ollama" : "groq";
   const url =
     provider === "ollama"
@@ -230,8 +232,9 @@ export const generateAgentProposal = async (input: {
   weights: DebateWeights;
   evidence?: { summary: string; output: string };
   promptCategory?: string;
+  providerOverride?: LlmProvider;
 }): Promise<AgentProposalDraft> => {
-  const config = getLlmConfig();
+  const config = getLlmConfig(input.providerOverride);
   if (!config.enabled || !config.url || !config.model) {
     throw new Error("LLM is not configured.");
   }
@@ -318,8 +321,9 @@ export const generateFinalSolution = async (input: {
   scenario: string;
   proposals: AgentProposalDraft[];
   evidence?: { summary: string; output: string };
+  providerOverride?: LlmProvider;
 }): Promise<FinalSolutionDraft> => {
-  const config = getLlmConfig();
+  const config = getLlmConfig(input.providerOverride);
   if (!config.enabled || !config.url || !config.model) {
     throw new Error("LLM is not configured.");
   }
@@ -392,8 +396,9 @@ export const generateFinalResponse = async (input: {
   proposals: AgentProposalDraft[];
   evidence?: { summary: string; output: string };
   codeScenario?: boolean;
+  providerOverride?: LlmProvider;
 }): Promise<string> => {
-  const config = getLlmConfig();
+  const config = getLlmConfig(input.providerOverride);
   if (!config.enabled || !config.url || !config.model) {
     throw new Error("LLM is not configured.");
   }
@@ -496,8 +501,11 @@ export const generateFinalResponse = async (input: {
   throw new Error("LLM final response failed validation.");
 };
 
-export const classifyPrompt = async (input: { scenario: string }): Promise<PromptCategory> => {
-  const config = getLlmConfig();
+export const classifyPrompt = async (input: {
+  scenario: string;
+  providerOverride?: LlmProvider;
+}): Promise<PromptCategory> => {
+  const config = getLlmConfig(input.providerOverride);
   if (!config.enabled || !config.url || !config.model) {
     throw new Error("LLM is not configured.");
   }

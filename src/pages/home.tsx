@@ -14,7 +14,7 @@ const STARTER_PROMPTS = [
   "I want to visit Africa on a road trip. Propose alternative routes and trade-offs.",
   "Propose a recovery plan for a production incident caused by a bad deploy.",
   "How should we prioritize performance vs. accuracy in a recommendation system?",
-  "Will ETH go up? Provide a cautious, assumption-based response.",
+  "Will ETH go up? Provide a fundamental analysis of the crypto market.",
 ];
 
 const DEFAULT_WEIGHTS: DebateWeights = {

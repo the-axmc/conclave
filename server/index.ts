@@ -127,14 +127,11 @@ const handleRun = async (req: RequestWithBody, res: ResponseWriter) => {
       return;
     }
   }
-  const priorProvider = process.env.LLM_PROVIDER;
-  if (body.llmProvider) {
-    process.env.LLM_PROVIDER = body.llmProvider;
-  }
   try {
     const session = await runDebate(body.scenario, {
       weights: body.weights,
       runVerification: body.runVerification,
+      llmProvider: body.llmProvider,
     });
     const sessions = await readSessions();
     sessions.unshift(trimSession(session));
@@ -145,13 +142,7 @@ const handleRun = async (req: RequestWithBody, res: ResponseWriter) => {
     const message = error instanceof Error ? error.message : "Debate run failed.";
     sendError(res, 400, message);
   } finally {
-    if (body.llmProvider) {
-      if (priorProvider === undefined) {
-        delete process.env.LLM_PROVIDER;
-      } else {
-        process.env.LLM_PROVIDER = priorProvider;
-      }
-    }
+    // no-op
   }
 };
 

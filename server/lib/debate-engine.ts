@@ -4,7 +4,7 @@ import type {
 } from "./adapters/types";
 import { mockAdapter } from "./adapters/mock-adapter";
 import { callMcpTool } from "./mcp-client";
-import { classifyPrompt, generateAgentProposal, generateFinalResponse, generateFinalSolution, getLlmConfig } from "./adapters/llm-adapter";
+import { classifyPrompt, generateAgentProposal, generateFinalResponse, generateFinalSolution, getLlmConfig, type LlmProvider } from "./adapters/llm-adapter";
 import type {
   DebateAgent,
   DebateDiff,
@@ -486,13 +486,14 @@ const buildUncertaintySummary = (
 
 export const runDebate = async (
   scenario?: string,
-  options?: { weights?: DebateWeights; runVerification?: boolean },
+  options?: { weights?: DebateWeights; runVerification?: boolean; llmProvider?: LlmProvider },
 ): Promise<DebateSession> => {
   const adapter = selectAdapter();
   const baseTime = new Date();
   const weights = resolveWeights(options?.weights);
   const scenarioText = scenario ?? defaultScenario;
   const runVerificationRequested = options?.runVerification ?? true;
+  const providerOverride = options?.llmProvider;
   const isCodeScenario = (text: string) => {
     const lowered = text.toLowerCase();
     return [
@@ -517,7 +518,7 @@ export const runDebate = async (
   };
   const codeScenario = isCodeScenario(scenarioText);
   const runVerification = codeScenario ? (runVerificationRequested || codeScenario) : false;
-  const llmConfig = getLlmConfig();
+  const llmConfig = getLlmConfig(providerOverride);
   let plans = basePlans;
   const generationWarnings: string[] = [];
   if (!llmConfig.enabled) {
@@ -527,7 +528,7 @@ export const runDebate = async (
   }
   let promptCategory: string | undefined;
   try {
-    promptCategory = await classifyPrompt({ scenario: scenarioText });
+    promptCategory = await classifyPrompt({ scenario: scenarioText, providerOverride });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown prompt classification error.";
     generationWarnings.push(`Prompt classification failed; defaulting to reasoning-analysis. ${message}`);
@@ -541,70 +542,7 @@ export const runDebate = async (
     summary: "Verification skipped.",
     adapterName: adapter.name,
   };
-
-  if (runVerification) {
-    try {
-      const verificationMode = (process.env.VERIFICATION_MODE ?? "auto").toLowerCase();
-      const mode =
-        verificationMode === "real"
-          ? "real"
-          : verificationMode === "mock"
-            ? "mock"
-            : codeScenario
-              ? "real"
-              : "mock";
-      const result = await callMcpTool("verify_plan", {
-        sessionId: `session-${baseTime.getTime()}`,
-        planId: "plan-b",
-        mode,
-        fixturePath: process.env.VERIFICATION_FIXTURE_PATH,
-        command: process.env.VERIFICATION_COMMAND,
-      });
-      verification = {
-        passed: result.status === "pass",
-        output: result.logs.join("\n"),
-        durationMs: new Date(result.finishedAt).getTime() - new Date(result.startedAt).getTime(),
-        summary: result.summary,
-        reliability: result.reliability,
-        adapterName: "mcp",
-        startedAt: result.startedAt,
-        finishedAt: result.finishedAt,
-        warning: result.status === "error" ? "MCP verification error; falling back to mock." : undefined,
-      };
-
-      if (result.status === "error") {
-        const fallback = await mockAdapter.runVerification({
-          scenario: scenarioText,
-          plan: plans[1],
-        });
-        verification = {
-          ...fallback,
-          warning: "MCP verification failed; fell back to mock.",
-          adapterName: "mock",
-        };
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown verification error.";
-      generationWarnings.push(`MCP verification failed; fell back to mock. ${message}`);
-      const fallback = await mockAdapter.runVerification({
-        scenario: scenarioText,
-        plan: plans[1],
-      });
-      verification = {
-        ...fallback,
-        warning: "MCP verification failed; fell back to mock.",
-        adapterName: "mock",
-      };
-    }
-  }
-
-  const evidenceForAgents =
-    runVerification && codeScenario
-      ? {
-          summary: verification.summary,
-          output: verification.output,
-        }
-      : undefined;
+  let evidenceForAgents: { summary: string; output: string } | undefined;
 
   if (codeScenario && !runVerificationRequested) {
     generationWarnings.push("Verification was auto-enabled for code-related scenarios.");
@@ -627,6 +565,7 @@ export const runDebate = async (
           weights,
           evidence: evidenceForAgents,
           promptCategory,
+          providerOverride,
         });
         proposals.push({
           agent: agent.role,
@@ -643,43 +582,6 @@ export const runDebate = async (
       }
     }
 
-    try {
-      if (proposals.length > 0) {
-        finalSolution = await generateFinalSolution({
-          scenario: scenarioText,
-          proposals: proposals.map((proposal) => ({
-            proposal: proposal.proposal,
-            rationale: proposal.rationale,
-            confidence: proposal.confidence,
-          })),
-          evidence: evidenceForAgents,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown final solution error.";
-      generationWarnings.push(`Final solution generation failed. ${message}`);
-    }
-
-    try {
-      if (finalSolution && proposals.length > 0) {
-        finalResponse = await generateFinalResponse({
-          scenario: scenarioText,
-          promptCategory,
-          finalSolution,
-          proposals: proposals.map((proposal) => ({
-            proposal: proposal.proposal,
-            rationale: proposal.rationale,
-            confidence: proposal.confidence,
-          })),
-          evidence: evidenceForAgents,
-          codeScenario,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown final response error.";
-      generationWarnings.push(`Final response generation failed. ${message}`);
-    }
-
     transcript = buildTranscriptFromProposals(baseTime, scenarioText, proposals, finalSolution);
   }
 
@@ -689,6 +591,124 @@ export const runDebate = async (
 
   if (proposals.length > 0) {
     plans = plansFromProposals(proposals);
+  }
+
+  if (runVerification) {
+    try {
+      const proposalPlanMap = new Map<DebateAgent["role"], string>([
+        ["planner", "plan-a"],
+        ["skeptic", "plan-b"],
+        ["security", "plan-c"],
+        ["cost", "plan-d"],
+      ]);
+      const ranked = proposals
+        .map((proposal) => ({
+          planId: proposalPlanMap.get(proposal.agent) ?? "plan-a",
+          confidence: proposal.confidence,
+        }))
+        .sort((a, b) => b.confidence - a.confidence);
+      const targetPlanId = ranked[0]?.planId ?? plans[0]?.id ?? "plan-a";
+      const targetPlan = plans.find((plan) => plan.id === targetPlanId) ?? plans[0];
+
+      const verificationMode = (process.env.VERIFICATION_MODE ?? "auto").toLowerCase();
+      const mode =
+        verificationMode === "real"
+          ? "real"
+          : verificationMode === "mock"
+            ? "mock"
+            : codeScenario
+              ? "real"
+              : "mock";
+      const result = await callMcpTool("verify_plan", {
+        sessionId: `session-${baseTime.getTime()}`,
+        planId: targetPlanId,
+        mode,
+        fixturePath: process.env.VERIFICATION_FIXTURE_PATH,
+        command: process.env.VERIFICATION_COMMAND,
+      });
+      verification = {
+        passed: result.status === "pass",
+        output: result.logs.join("\n"),
+        durationMs: new Date(result.finishedAt).getTime() - new Date(result.startedAt).getTime(),
+        summary: result.summary,
+        reliability: result.reliability,
+        adapterName: "mcp",
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        warning: result.status === "error" ? "MCP verification error; falling back to mock." : undefined,
+      };
+
+      if (result.status === "error") {
+        const fallback = await mockAdapter.runVerification({
+          scenario: scenarioText,
+          plan: targetPlan ?? plans[1],
+        });
+        verification = {
+          ...fallback,
+          warning: "MCP verification failed; fell back to mock.",
+          adapterName: "mock",
+        };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown verification error.";
+      generationWarnings.push(`MCP verification failed; fell back to mock. ${message}`);
+      const fallback = await mockAdapter.runVerification({
+        scenario: scenarioText,
+        plan: plans[1],
+      });
+      verification = {
+        ...fallback,
+        warning: "MCP verification failed; fell back to mock.",
+        adapterName: "mock",
+      };
+    }
+  }
+
+  evidenceForAgents =
+    runVerification && codeScenario
+      ? {
+          summary: verification.summary,
+          output: verification.output,
+        }
+      : undefined;
+
+  try {
+    if (proposals.length > 0) {
+      finalSolution = await generateFinalSolution({
+        scenario: scenarioText,
+        proposals: proposals.map((proposal) => ({
+          proposal: proposal.proposal,
+          rationale: proposal.rationale,
+          confidence: proposal.confidence,
+        })),
+        evidence: evidenceForAgents,
+        providerOverride,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown final solution error.";
+    generationWarnings.push(`Final solution generation failed. ${message}`);
+  }
+
+  try {
+    if (finalSolution && proposals.length > 0) {
+      finalResponse = await generateFinalResponse({
+        scenario: scenarioText,
+        promptCategory,
+        finalSolution,
+        proposals: proposals.map((proposal) => ({
+          proposal: proposal.proposal,
+          rationale: proposal.rationale,
+          confidence: proposal.confidence,
+        })),
+        evidence: evidenceForAgents,
+        codeScenario,
+        providerOverride,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown final response error.";
+    generationWarnings.push(`Final response generation failed. ${message}`);
   }
 
   if (!finalSolution && plans[1]) {
@@ -721,6 +741,7 @@ export const runDebate = async (
       const proposal = proposals.find((item) => item.agent === role);
       if (!proposal) return;
       const planId = proposalPlanMap.get(role) ?? "plan-a";
+      const agentWeight = weights[role];
       current = reviseFromAgent(
         current,
         role,
@@ -733,7 +754,7 @@ export const runDebate = async (
         ],
         baseTime,
         2 + index * 2,
-        1,
+        agentWeight,
       );
       probabilities.push(
         recordSnapshot(

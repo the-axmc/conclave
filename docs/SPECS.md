@@ -74,10 +74,6 @@ This document defines the upgraded app behavior now that LLM‑generated debate 
 
 ---
 
-## Open Questions
-- Do we want a separate “Verdict Summary” text field in `DebateSession`, or should it be derived client‑side?
-- How strict should we be about LLM output JSON compliance (reject vs salvage)?
-
 ## Risks
 - LLM outputs may be malformed; must robustly parse or fallback.
 - UI can become cluttered if plans, transcript, and evidence all compete for attention.

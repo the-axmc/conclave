@@ -14,8 +14,11 @@ type McpResponse = {
   error?: { message?: string };
 };
 
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number) => {
-  const controller = new AbortController();
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  controller: AbortController,
+) => {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await promise;
@@ -35,6 +38,7 @@ export const callMcpTool = async (
   }
 
   const apiKey = process.env.MCP_API_KEY;
+  const controller = new AbortController();
   const response = await withTimeout(
     fetch(url, {
       method: "POST",
@@ -42,6 +46,7 @@ export const callMcpTool = async (
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
+      signal: controller.signal,
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: Date.now(),
@@ -56,6 +61,7 @@ export const callMcpTool = async (
       }),
     }),
     timeoutMs,
+    controller,
   );
 
   if (!response.ok) {
